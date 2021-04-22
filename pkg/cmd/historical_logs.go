@@ -3,18 +3,19 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"net/http"
+	"strconv"
+	"strings"
+
 	"github.com/ViaQ/log-exploration-oc-plugin/pkg/client"
 	"github.com/ViaQ/log-exploration-oc-plugin/pkg/constants"
 	"github.com/ViaQ/log-exploration-oc-plugin/pkg/k8sresources"
 	"github.com/ViaQ/log-exploration-oc-plugin/pkg/logs"
 	"github.com/spf13/cobra"
-	"io/ioutil"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/kubectl/pkg/util/i18n"
 	"k8s.io/kubectl/pkg/util/templates"
-	"net/http"
-	"strconv"
-	"strings"
 )
 
 var (
