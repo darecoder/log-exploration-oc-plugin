@@ -1,52 +1,52 @@
 package cmd
 
 import (
-	"net/http"
-	"os"
 	"testing"
-
-	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
 
-func TestMakeHttpRequest(t *testing.T) {
+func TestFetchLogs(t *testing.T) {
 	tests := []struct {
-		TestName        string
-		ShouldFail      bool
-		TestApiUrl      string
-		TestLogParams   map[string]string
-		TestResponseUrl string
+		TestName      string
+		ShouldFail    bool
+		TestLogList   []string
+		TestApiUrl    string
+		TestLogParams map[string]string
+		Error         error
 	}{
 		{
 			"Logs with no parameters",
 			false,
+			[]string{},
 			"http://localhost:8080/logs/filter",
 			map[string]string{},
-			"http://localhost:8080/logs/filter",
+			nil,
 		},
 		{
 			"Logs by podname",
 			false,
+			[]string{},
 			"http://localhost:8080/logs/filter",
 			map[string]string{"Podname": "openshift-kube-scheduler"},
-			"http://localhost:8080/logs/filter?podname=openshift-kube-scheduler",
+			nil,
 		},
 		{
 			"Logs by given time interval",
 			false,
+			[]string{},
 			"http://localhost:8080/logs/filter",
 			map[string]string{"Tail": "00h30m"},
-			"http://localhost:8080/logs/filter?podname=openshift-kube-scheduler",
+			nil,
 		},
 		{
 			"Logs with max log limit",
 			false,
+			[]string{},
 			"http://localhost:8080/logs/filter",
 			map[string]string{"Limit": "5"},
-			"http://localhost:8080/logs/filter?podname=openshift-kube-scheduler&maxlogs=5",
+			nil,
 		},
 	}
 
-	NewCmdLogFilter(genericclioptions.IOStreams{In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr})
 	logParameters := LogParameters{}
 	for _, tt := range tests {
 		t.Log("Running:", tt.TestName)
@@ -74,12 +74,15 @@ func TestMakeHttpRequest(t *testing.T) {
 				logParameters.DaemonSet = v
 			}
 		}
-		res, _ := logParameters.makeHttpRequest(tt.TestApiUrl)
-		if res.Request.URL.String() != tt.TestResponseUrl {
-			t.Errorf("Response url expected to be %s and found %s", tt.TestResponseUrl, res.Request.URL)
+		err := fetchLogs(&tt.TestLogList, tt.TestApiUrl, &logParameters)
+		if err == nil && tt.Error != nil {
+			t.Errorf("Expected error is %v, found %v", tt.Error, err)
 		}
-		if res.StatusCode != http.StatusOK {
-			t.Errorf("Expected status code to be %d and found %d", http.StatusOK, res.StatusCode)
+		if err != nil && tt.Error == nil {
+			t.Errorf("Expected error is %v, found %v", tt.Error, err)
+		}
+		if err != nil && tt.Error != nil && err.Error() != tt.Error.Error() {
+			t.Errorf("Expected error is %v, found %v", tt.Error, err)
 		}
 	}
 }

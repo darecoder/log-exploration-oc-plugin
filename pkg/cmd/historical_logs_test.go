@@ -1,14 +1,17 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"testing"
 
+	"github.com/ViaQ/log-exploration-oc-plugin/pkg/k8sresources"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestExecute(t *testing.T) {
@@ -55,7 +58,7 @@ func TestExecute(t *testing.T) {
 		}
 		err := logParameters.Execute(genericclioptions.IOStreams{In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr})
 		if err != tt.Error {
-			t.Fail()
+			t.Errorf("Expected error is %v, found %v", tt.Error, err)
 		}
 	}
 }
@@ -66,14 +69,21 @@ func TestPrintLogs(t *testing.T) {
 		ShouldFail  bool
 		TestLogList []string
 		TestLimit   string
-		Response    error
+		Error       error
 	}{
+		{
+			"Test correct LogList",
+			false,
+			[]string{"test log-1", "test log-2", "test log-3"},
+			"5",
+			nil,
+		},
 		{
 			"Empty LogList",
 			false,
 			[]string{},
 			"5",
-			nil,
+			fmt.Errorf("no logs present, or input parameters were invalid"),
 		},
 		{
 			"Limit equals to 0",
@@ -87,48 +97,23 @@ func TestPrintLogs(t *testing.T) {
 			false,
 			[]string{"test log-1", "test log-2", "test log-3"},
 			"-2",
-			nil,
+			fmt.Errorf("incorrect \"limit\" value entered, an integer value between 0 and 1000 is required"),
 		},
 	}
 
-	for _, tt := range tests {
-		err := printLogs(tt.TestLogList, genericclioptions.IOStreams{In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr}, tt.TestLimit)
-		fmt.Printf("\nError: %v\n", err)
-		t.Fail()
-	}
-}
-
-func TestGetLogs(t *testing.T) {
-	tests := []struct {
-		TestName         string
-		ShouldFail       bool
-		TestLogList      []string
-		TestResponseBody []byte
-		Error            error
-	}{
-		{
-			"Empty loglist",
-			false,
-			[]string{},
-			[]byte{},
-			nil,
-		},
-		{
-			"Empty response",
-			false,
-			[]string{},
-			[]byte{},
-			nil,
-		},
-	}
 	for _, tt := range tests {
 		t.Log("Running:", tt.TestName)
-		err := getLogs(tt.TestResponseBody, &tt.TestLogList)
-		if tt.Error != err {
-			t.Fail()
+		err := printLogs(tt.TestLogList, genericclioptions.IOStreams{In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr}, tt.TestLimit)
+		if err == nil && tt.Error != nil {
+			t.Errorf("Expected error is %v, found %v", tt.Error, err)
+		}
+		if err != nil && tt.Error == nil {
+			t.Errorf("Expected error is %v, found %v", tt.Error, err)
+		}
+		if err != nil && tt.Error != nil && err.Error() != tt.Error.Error() {
+			t.Errorf("Expected error is %v, found %v", tt.Error, err)
 		}
 	}
-
 }
 
 func TestGetDaemonSetPodsList(t *testing.T) {
@@ -141,42 +126,64 @@ func TestGetDaemonSetPodsList(t *testing.T) {
 		Error       error
 	}{
 		{
-			"Empty loglist",
+			"Daemonset doesn't exist",
 			false,
-			"",
-			"",
+			"dummy-daemon",
+			"openshift-logging",
 			[]string{},
-			nil,
+			fmt.Errorf("daemon set \"dummy-daemon\" not found in namespace \"openshift-logging\""),
 		},
 		{
-			"Empty response",
+			"Daemonset is present",
 			false,
-			"",
-			"",
+			"openshift-daemon",
+			"openshift-logging",
 			[]string{},
 			nil,
 		},
 	}
 
-	kubeconfig := filepath.Join(
-		os.Getenv("HOME"), ".kube", "config",
-	)
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		t.Errorf("kubeconfig Error: %v", err)
-	}
+	clientset := fake.NewSimpleClientset(
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "openshift-daemon",
+				Namespace:   "openshift-logging",
+				Annotations: map[string]string{},
+			},
+			Spec: appsv1.DaemonSetSpec{
+				Selector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"name": "logging"},
+				},
+			},
+		})
 
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		t.Errorf("an error occurred while creating a kubernetes client: %v", err)
-	}
+	clientset.CoreV1().Pods("openshift-logging").Create(context.TODO(),
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name:        "openshift-daemon",
+			Namespace:   "openshift-logging",
+			Annotations: map[string]string{},
+		},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{
+					{
+						Name: "logging",
+					},
+				},
+			},
+		}, metav1.CreateOptions{})
 
 	for _, tt := range tests {
 		t.Log("Running:", tt.TestName)
 
-		err := GetDaemonSetPodsList(clientset, tt.DaemonSet, tt.Namespace, &tt.TestLogList)
-		if tt.Error != err {
-			t.Fail()
+		err := k8sresources.GetDaemonSetPodsList(clientset, &tt.TestLogList, tt.DaemonSet, tt.Namespace)
+		if err == nil && tt.Error != nil {
+			t.Errorf("Expected error is %v, found %v", tt.Error, err)
+		}
+		if err != nil && tt.Error == nil {
+			t.Errorf("Expected error is %v, found %v", tt.Error, err)
+		}
+		if err != nil && tt.Error != nil && err.Error() != tt.Error.Error() {
+			t.Errorf("Expected error is %v, found %v", tt.Error, err)
 		}
 	}
 }
@@ -185,48 +192,70 @@ func TestGetStatefulSetPodsList(t *testing.T) {
 	tests := []struct {
 		TestName    string
 		ShouldFail  bool
-		StatefulSet string
+		StatefulSet   string
 		Namespace   string
 		TestLogList []string
 		Error       error
 	}{
 		{
-			"Empty loglist",
+			"Statefulset doesn't exist",
 			false,
-			"",
-			"",
+			"dummy-statefulset",
+			"openshift-logging",
 			[]string{},
-			nil,
+			fmt.Errorf("stateful set \"dummy-statefulset\" not found in namespace \"openshift-logging\""),
 		},
 		{
-			"Empty response",
+			"Statefulset is present",
 			false,
-			"",
-			"",
+			"openshift-stateful",
+			"openshift-logging",
 			[]string{},
 			nil,
 		},
 	}
 
-	kubeconfig := filepath.Join(
-		os.Getenv("HOME"), ".kube", "config",
-	)
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		t.Errorf("kubeconfig Error: %v", err)
-	}
+	clientset := fake.NewSimpleClientset(
+		&appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "openshift-stateful",
+				Namespace:   "openshift-logging",
+				Annotations: map[string]string{},
+			},
+			Spec: appsv1.StatefulSetSpec{
+				Selector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"name": "logging"},
+				},
+			},
+		})
 
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		t.Errorf("an error occurred while creating a kubernetes client: %v", err)
-	}
+	clientset.CoreV1().Pods("openshift-logging").Create(context.TODO(),
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name:        "openshift-stateful",
+			Namespace:   "openshift-logging",
+			Annotations: map[string]string{},
+		},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{
+					{
+						Name: "logging",
+					},
+				},
+			},
+		}, metav1.CreateOptions{})
 
 	for _, tt := range tests {
 		t.Log("Running:", tt.TestName)
 
-		err := GetStatefulSetPodsList(clientset, tt.StatefulSet, tt.Namespace, &tt.TestLogList)
-		if tt.Error != err {
-			t.Fail()
+		err := k8sresources.GetStatefulSetPodsList(clientset, &tt.TestLogList, tt.StatefulSet, tt.Namespace)
+		if err == nil && tt.Error != nil {
+			t.Errorf("Expected error is %v, found %v", tt.Error, err)
+		}
+		if err != nil && tt.Error == nil {
+			t.Errorf("Expected error is %v, found %v", tt.Error, err)
+		}
+		if err != nil && tt.Error != nil && err.Error() != tt.Error.Error() {
+			t.Errorf("Expected error is %v, found %v", tt.Error, err)
 		}
 	}
 }
@@ -235,48 +264,70 @@ func TestGetDeploymentPodsList(t *testing.T) {
 	tests := []struct {
 		TestName    string
 		ShouldFail  bool
-		Deployment  string
+		Deployment   string
 		Namespace   string
 		TestLogList []string
 		Error       error
 	}{
 		{
-			"Empty loglist",
+			"Deployment doesn't exist",
 			false,
-			"",
-			"",
+			"dummy-deployment",
+			"openshift-logging",
 			[]string{},
-			nil,
+			fmt.Errorf("deployment \"dummy-deployment\" not found in namespace \"openshift-logging\""),
 		},
 		{
-			"Empty response",
+			"Deployment is present",
 			false,
-			"",
-			"",
+			"openshift-deployment",
+			"openshift-logging",
 			[]string{},
 			nil,
 		},
 	}
 
-	kubeconfig := filepath.Join(
-		os.Getenv("HOME"), ".kube", "config",
-	)
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		t.Errorf("kubeconfig Error: %v", err)
-	}
+	clientset := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "openshift-deployment",
+				Namespace:   "openshift-logging",
+				Annotations: map[string]string{},
+			},
+			Spec: appsv1.DeploymentSpec{
+				Selector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"name": "logging"},
+				},
+			},
+		})
 
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		t.Errorf("an error occurred while creating a kubernetes client: %v", err)
-	}
+	clientset.CoreV1().Pods("openshift-logging").Create(context.TODO(),
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name:        "openshift-deployment",
+			Namespace:   "openshift-logging",
+			Annotations: map[string]string{},
+		},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{
+					{
+						Name: "logging",
+					},
+				},
+			},
+		}, metav1.CreateOptions{})
 
 	for _, tt := range tests {
 		t.Log("Running:", tt.TestName)
 
-		err := GetDaemonSetPodsList(clientset, tt.Deployment, tt.Namespace, &tt.TestLogList)
-		if tt.Error != err {
-			t.Fail()
+		err := k8sresources.GetDeploymentPodsList(clientset, &tt.TestLogList, tt.Deployment, tt.Namespace)
+		if err == nil && tt.Error != nil {
+			t.Errorf("Expected error is %v, found %v", tt.Error, err)
+		}
+		if err != nil && tt.Error == nil {
+			t.Errorf("Expected error is %v, found %v", tt.Error, err)
+		}
+		if err != nil && tt.Error != nil && err.Error() != tt.Error.Error() {
+			t.Errorf("Expected error is %v, found %v", tt.Error, err)
 		}
 	}
 }
