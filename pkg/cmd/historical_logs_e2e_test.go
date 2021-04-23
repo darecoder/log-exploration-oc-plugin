@@ -1,59 +1,53 @@
-package teste2e
+package cmd
 
 import (
-	"fmt"
+	"net/http"
 	"os"
 	"testing"
 
-	logs "github.com/ViaQ/log-exploration-oc-plugin/pkg/cmd/historical_logs"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
 
 func TestMakeHttpRequest(t *testing.T) {
 	tests := []struct {
-		TestName      string
-		ShouldFail    bool
-		TestApiUrl    string
-		TestLogParams map[string]string
-		TestURL       string
-		Response      map[string][]string
+		TestName        string
+		ShouldFail      bool
+		TestApiUrl      string
+		TestLogParams   map[string]string
+		TestResponseUrl string
 	}{
 		{
 			"Logs with no parameters",
 			false,
-			"log-exploration-api-route-openshift-logging.apps.test.devcluster.openshift.com",
+			"http://localhost:8080/logs/filter",
 			map[string]string{},
-			"",
-			map[string][]string{"Logs": {"test-log-1", "test-log-2", "test-log-3"}},
+			"http://localhost:8080/logs/filter",
 		},
 		{
 			"Logs by podname",
 			false,
-			"log-exploration-api-route-openshift-logging.apps.test.devcluster.openshift.com",
+			"http://localhost:8080/logs/filter",
 			map[string]string{"Podname": "openshift-kube-scheduler"},
-			"",
-			map[string][]string{"Logs": {"test-log-1", "test-log-2", "test-log-3"}},
+			"http://localhost:8080/logs/filter?podname=openshift-kube-scheduler",
 		},
 		{
 			"Logs by given time interval",
 			false,
-			"log-exploration-api-route-openshift-logging.apps.test.devcluster.openshift.com",
+			"http://localhost:8080/logs/filter",
 			map[string]string{"Tail": "00h30m"},
-			"",
-			map[string][]string{"Logs": {"test-log-1", "test-log-2", "test-log-3"}},
+			"http://localhost:8080/logs/filter?podname=openshift-kube-scheduler",
 		},
 		{
 			"Logs with max log limit",
 			false,
-			"log-exploration-api-route-openshift-logging.apps.emishra-test121.devcluster.openshift.com",
+			"http://localhost:8080/logs/filter",
 			map[string]string{"Limit": "5"},
-			"",
-			map[string][]string{"Logs": {"test-log-1", "test-log-2", "test-log-3"}},
+			"http://localhost:8080/logs/filter?podname=openshift-kube-scheduler&maxlogs=5",
 		},
 	}
 
-	logs.NewCmdLogFilter(genericclioptions.IOStreams{In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr})
-	logParameters := logs.LogParameters{}
+	NewCmdLogFilter(genericclioptions.IOStreams{In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr})
+	logParameters := LogParameters{}
 	for _, tt := range tests {
 		t.Log("Running:", tt.TestName)
 		for k, v := range tt.TestLogParams {
@@ -81,6 +75,11 @@ func TestMakeHttpRequest(t *testing.T) {
 			}
 		}
 		res, _ := logParameters.makeHttpRequest(tt.TestApiUrl)
-		fmt.Print(res)
+		if res.Request.URL.String() != tt.TestResponseUrl {
+			t.Errorf("Response url expected to be %s and found %s", tt.TestResponseUrl, res.Request.URL)
+		}
+		if res.StatusCode != http.StatusOK {
+			t.Errorf("Expected status code to be %d and found %d", http.StatusOK, res.StatusCode)
+		}
 	}
 }
