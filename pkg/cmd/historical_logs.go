@@ -52,7 +52,7 @@ type LogParameters struct {
 	StartTime string
 	EndTime   string
 	Level     string
-	Limit     int
+	Limit     string
 	Prefix    bool
 	k8sresources.Resources
 }
@@ -66,7 +66,11 @@ func NewCmdLogFilter(streams genericclioptions.IOStreams) *cobra.Command {
 		Short:   "View logs filtered on various parameters",
 		Example: logsExample,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			err := o.Execute(streams, args)
+			kubernetesOptions, err := client.KubernetesClient()
+			if err != nil {
+				return err
+			}
+			err = o.Execute(kubernetesOptions, streams, args)
 			if err != nil {
 				return err
 			}
@@ -83,18 +87,12 @@ func (o *LogParameters) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&o.Namespace, "namespace", "", "Extract Historical logs from a specific namespace")
 	cmd.Flags().StringVar(&o.Tail, "tail", "", "Fetch Historical logs for the last N seconds, minutes, hours, or days")
 	cmd.Flags().StringVar(&o.Level, "level", "", "Fetch Historical logs from different logging level, Example: Info,debug,Error,Unknown, etc")
-	cmd.Flags().IntVar(&o.Limit, "limit", constants.LimitUpperBound, "Specify number of documents [logs] to be fetched")
+	cmd.Flags().StringVar(&o.Limit, "limit", constants.LimitUpperBound, "Specify number of documents [logs] to be fetched")
 	cmd.Flags().BoolVar(&o.Prefix, "prefix", false, "Prefix each log with the log source (pod name and container name)")
 }
 
-func (o *LogParameters) Execute(streams genericclioptions.IOStreams, args []string) error {
-
-	kubernetesOptions, err := client.KubernetesClient()
-	if err != nil {
-		return err
-	}
-
-	err = o.ProcessLogParameters(kubernetesOptions, args)
+func (o *LogParameters) Execute(kubernetesOptions *client.KubernetesOptions, streams genericclioptions.IOStreams, args []string) error {
+	err := o.ProcessLogParameters(kubernetesOptions, args)
 
 	if err != nil {
 		return err
@@ -112,15 +110,16 @@ func (o *LogParameters) Execute(streams genericclioptions.IOStreams, args []stri
 	startIndex := strings.Index(kubernetesOptions.ClusterUrl, ".") + 1
 	clusterName := kubernetesOptions.ClusterUrl[startIndex:endIndex]
 
-	/*Example cluster URL : http://api.sangupta-tetrh.devcluster.openshift.com:6443. The first occurrence of '.' and last occurrence of ':'
-	act as start and end indices. Extract cluster name as substring using start and end Indices i.e, sangupta-tetrh.devcluster.openshift.com to build the log-exploration-api URL*/
+	/*Example cluster URL : http://api.sangupta-tetrh.devcluster.openshift.com:6443.
+	The first occurrence of '.' and last occurrence of ':' act as start and end indices.
+	Extract cluster name as substring using start and end Indices
+	i.e, sangupta-tetrh.devcluster.openshift.com to build the log-exploration-api URL*/
 
 	baseUrl := "http://log-exploration-api-route-openshift-logging.apps." + clusterName + "/logs/filter"
 	podLogsCh := make(chan []string)
 	var logList []string
 	for _, pod := range podList {
-
-		go fetchLogs(baseUrl, o, pod, podLogsCh)
+		go FetchLogs(baseUrl, o, pod, podLogsCh)
 	}
 
 	for index := 0; index < len(podList); index++ {
@@ -137,7 +136,7 @@ func (o *LogParameters) Execute(streams genericclioptions.IOStreams, args []stri
 
 }
 
-func fetchLogs(baseUrl string, logParameters *LogParameters, podname string, podLogsCh chan<- []string) {
+func FetchLogs(baseUrl string, logParameters *LogParameters, podname string, podLogsCh chan<- []string) {
 
 	req, err := http.NewRequest("GET", baseUrl, nil)
 
@@ -152,7 +151,7 @@ func fetchLogs(baseUrl string, logParameters *LogParameters, podname string, pod
 	query.Add("namespace", logParameters.Namespace)
 	query.Add("starttime", logParameters.StartTime)
 	query.Add("finishtime", logParameters.EndTime)
-	query.Add("maxlogs", strconv.Itoa(logParameters.Limit))
+	query.Add("maxlogs", logParameters.Limit)
 	query.Add("level", logParameters.Level)
 	req.URL.RawQuery = query.Encode()
 
@@ -209,17 +208,18 @@ func fetchLogs(baseUrl string, logParameters *LogParameters, podname string, pod
 	podLogsCh <- logList
 }
 
-func printLogs(logList []string, streams genericclioptions.IOStreams, limit int) error {
+func printLogs(logList []string, streams genericclioptions.IOStreams, limit string) error {
 
 	if len(logList) == 0 {
 		return fmt.Errorf("no logs present, or input parameters were invalid")
 	}
 
-	var err error
-
 	for logCount, log := range logList {
-
-		if logCount >= limit {
+		count, err := strconv.Atoi(limit)
+		if err != nil || count < 0 {
+			return fmt.Errorf("incorrect \"limit\" value entered, an integer value between 0 and 1000 is required")
+		}
+		if logCount >= count {
 			return nil
 		}
 		_, err = fmt.Fprintf(streams.Out, log+"\n")

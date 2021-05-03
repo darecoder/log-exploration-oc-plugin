@@ -2,11 +2,12 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/ViaQ/log-exploration-oc-plugin/pkg/client"
-	"github.com/ViaQ/log-exploration-oc-plugin/pkg/constants"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ViaQ/log-exploration-oc-plugin/pkg/client"
+	"github.com/ViaQ/log-exploration-oc-plugin/pkg/constants"
 )
 
 func (o *LogParameters) ProcessLogParameters(kubernetesOptions *client.KubernetesOptions, args []string) error {
@@ -38,8 +39,16 @@ func (o *LogParameters) ProcessLogParameters(kubernetesOptions *client.Kubernete
 		o.EndTime = endTime.UTC().Format(time.RFC3339Nano)
 	}
 
-	if o.Limit < constants.LimitLowerBound || o.Limit > constants.LimitUpperBound {
-		return fmt.Errorf("incorrect \"limit\" value entered, an integer value between %d and %d is required", constants.LimitLowerBound, constants.LimitUpperBound)
+	if len(o.Limit) > 0 {
+		limit, err := strconv.Atoi(o.Limit)
+		if err != nil {
+			return err
+		}
+		lower, _ := strconv.Atoi(constants.LimitLowerBound)
+		upper, _ := strconv.Atoi(constants.LimitUpperBound)
+		if limit < lower || limit > upper {
+			return fmt.Errorf("incorrect \"limit\" value entered, an integer value between %v and %v is required", constants.LimitLowerBound, constants.LimitUpperBound)
+		}
 	}
 
 	if len(o.Namespace) == 0 {
