@@ -3,19 +3,45 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
 	"github.com/ViaQ/log-exploration-oc-plugin/pkg/client"
 	"github.com/ViaQ/log-exploration-oc-plugin/pkg/k8sresources"
-	"github.com/gin-gonic/gin"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/kubernetes/fake"
 )
+
+type HTTPServer struct {
+	server *http.Server
+	router *http.ServeMux
+}
+
+func NewHTTPServer(host string, port uint) *HTTPServer {
+	s := &HTTPServer{
+		router: http.NewServeMux(),
+	}
+	s.server = &http.Server{
+		Addr:    fmt.Sprintf("%s:%d", host, port),
+		Handler: s,
+	}
+	return s
+}
+
+func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log.Printf("http request %s: %s\r\n", r.Method, r.URL.Path)
+	s.router.ServeHTTP(w, r)
+}
+
+func getLogsHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "this is serving from http-HandleFunc")
+}
 
 func TestExecute(t *testing.T) {
 	tests := []struct {
@@ -34,55 +60,52 @@ func TestExecute(t *testing.T) {
 			[]string{"deployment=openshift-deployment"},
 			nil,
 		},
-		{
-			"Logs with podname & namespace",
-			false,
-			map[string]string{"Podname": "openshift-logging-1234", "Namespace": "openshift-logging"},
-			map[string]string{"Deployment": "openshift-deployment"},
-			[]string{"deployment=openshift-deployment"},
-			nil,
-		},
-		{
-			"Logs with tail parameter",
-			false,
-			map[string]string{"Tail": "30m"},
-			map[string]string{"Deployment": "openshift-deployment"},
-			[]string{"deployment=openshift-deployment"},
-			nil,
-		},
-		{
-			"Logs with multiple parameters",
-			false,
-			map[string]string{
-				"Podname":   "openshift-logging-1234",
-				"Namespace": "openshift-logging",
-				"Tail":      "30m",
-				"Limit":     "5",
-			},
-			map[string]string{"Deployment": "openshift-deployment"},
-			[]string{"deployment=openshift-deployment"},
-			nil,
-		},
-		{
-			"Logs with valid integer limit",
-			false,
-			map[string]string{"Limit": "5"},
-			map[string]string{"Deployment": "openshift-deployment"},
-			[]string{"deployment=openshift-deployment"},
-			nil,
-		},
-		{
-			"Logs with negative limit",
-			false,
-			map[string]string{"Limit": "-5"},
-			map[string]string{"Deployment": "openshift-deployment"},
-			[]string{"deployment=openshift-deployment"},
-			fmt.Errorf("incorrect \"limit\" value entered, an integer value between 0 and 1000 is required"),
-		},
+		// {
+		// 	"Logs with podname & namespace",
+		// 	false,
+		// 	map[string]string{"Podname": "openshift-logging-1234", "Namespace": "openshift-logging"},
+		// 	map[string]string{"Deployment": "openshift-deployment"},
+		// 	[]string{"deployment=openshift-deployment"},
+		// 	nil,
+		// },
+		// {
+		// 	"Logs with tail parameter",
+		// 	false,
+		// 	map[string]string{"Tail": "30m"},
+		// 	map[string]string{"Deployment": "openshift-deployment"},
+		// 	[]string{"deployment=openshift-deployment"},
+		// 	nil,
+		// },
+		// {
+		// 	"Logs with multiple parameters",
+		// 	false,
+		// 	map[string]string{
+		// 		"Podname":   "openshift-logging-1234",
+		// 		"Namespace": "openshift-logging",
+		// 		"Tail":      "30m",
+		// 		"Limit":     "5",
+		// 	},
+		// 	map[string]string{"Deployment": "openshift-deployment"},
+		// 	[]string{"deployment=openshift-deployment"},
+		// 	nil,
+		// },
+		// {
+		// 	"Logs with valid integer limit",
+		// 	false,
+		// 	map[string]string{"Limit": "5"},
+		// 	map[string]string{"Deployment": "openshift-deployment"},
+		// 	[]string{"deployment=openshift-deployment"},
+		// 	nil,
+		// },
+		// {
+		// 	"Logs with negative limit",
+		// 	false,
+		// 	map[string]string{"Limit": "-5"},
+		// 	map[string]string{"Deployment": "openshift-deployment"},
+		// 	[]string{"deployment=openshift-deployment"},
+		// 	fmt.Errorf("incorrect \"limit\" value entered, an integer value between 0 and 1000 is required"),
+		// },
 	}
-
-	r := gin.Default()
-	r.GET("log-exploration-api-route-openshift-logging.apps.com/logs/filter", getLogs)
 
 	for _, tt := range tests {
 		t.Log("Running:", tt.TestName)
@@ -154,6 +177,21 @@ func TestExecute(t *testing.T) {
 			CurrentNamespace: "openshift-logging",
 		}
 
+		server := NewHTTPServer("http://log-exploration-api-route-openshift-logging.apps.com/logs", 0)
+		th := http.HandlerFunc(getLogsHandler)
+		server.router.Handle("/filter", th)
+		// server.RegisterHandler("http://log-exploration-api-route-openshift-logging.apps.com/logs/filter", getLogsHandler)
+
+		req, Error := http.NewRequest(http.MethodGet, "http://log-exploration-api-route-openshift-logging.apps.com/logs/filter", nil)
+		if Error != nil {
+			t.Errorf("Failed to create HTTP request. E: %v", Error)
+		}
+		rr := httptest.NewRecorder()
+		server.ServeHTTP(rr, req)
+		resp := rr.Body.String()
+		t.Errorf("Response: %v", resp)
+
+		
 		err := logParameters.Execute(kubernetesOptions, genericclioptions.IOStreams{In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr}, tt.Arguments)
 		if err == nil && tt.Error != nil {
 			t.Errorf("Expected error is %v, found %v", tt.Error, err)
@@ -167,19 +205,6 @@ func TestExecute(t *testing.T) {
 	}
 }
 
-func getLogs(gctx *gin.Context) {
-	var params LogParameters
-	err := gctx.Bind(&params)
-	if err != nil {
-		gctx.JSON(http.StatusInternalServerError, gin.H{ //If error is not nil, an internal server error might have ocurred
-			"An error occurred": []string{err.Error()},
-		})
-	}
-
-	gctx.JSON(http.StatusOK, gin.H{
-		"Logs": []string{"test-log-1", "test-log-2", "test-log-3", "test-log-4", "test-log-5"},
-	})
-}
 func TestPrintLogs(t *testing.T) {
 	tests := []struct {
 		TestName    string
@@ -239,3 +264,17 @@ func TestPrintLogs(t *testing.T) {
 		}
 	}
 }
+
+// func getLogs(gctx *gin.Context) {
+// 	var params LogParameters
+// 	err := gctx.Bind(&params)
+// 	if err != nil {
+// 		gctx.JSON(http.StatusInternalServerError, gin.H{ //If error is not nil, an internal server error might have ocurred
+// 			"An error occurred": []string{err.Error()},
+// 		})
+// 	}
+
+// 	gctx.JSON(http.StatusOK, gin.H{
+// 		"Logs": []string{"test-log-1", "test-log-2", "test-log-3", "test-log-4", "test-log-5"},
+// 	})
+// }
