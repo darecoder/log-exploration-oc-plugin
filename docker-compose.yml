@@ -23,7 +23,7 @@ services:
             - mynetwork
 
     log-exploration:
-        image: quay.io/openshift-logging/log-exploration-api:cdf71a5
+        image: quay.io/openshift-logging/log-exploration-api:latest
         container_name: log-exploration
         networks: 
             - mynetwork
